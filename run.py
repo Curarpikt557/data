@@ -7,6 +7,7 @@ from PIL import Image
 from tqdm import tqdm
 import torch
 from transformers import AutoProcessor, AutoModelForVision2Seq
+
 from qwen_vl_utils import process_vision_info
 
 # ==========================================
