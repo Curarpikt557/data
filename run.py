@@ -23,7 +23,7 @@ MODEL_NAME = "../Qwen-3-VL-8B-Thinking"     # 默认使用 Qwen 最新的开源 
 # 模型初始化
 # ==========================================
 print("Loading VLM Model...")
-model = AutoModelForVision2Seq.from_pretrained(
+model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_NAME, 
     dtype=torch.bfloat16,          # 注意是 dtype，不是 torch_dtype
     device_map="auto"
