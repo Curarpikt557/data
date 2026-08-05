@@ -81,13 +81,12 @@ def prepare_image_and_prompt(image_path, bbox, original_caption):
     pil_img = Image.fromarray(marked_img_rgb)
     
     # 4. 坐标归一化 (Qwen-VL 通常是 0-1000 范围)
-    norm_ymin = int((y_min / img_h) * 1000)
     norm_xmin = int((x_min / img_w) * 1000)
-    norm_ymax = int((y_max / img_h) * 1000)
+    norm_ymin = int((y_min / img_h) * 1000)
     norm_xmax = int((x_max / img_w) * 1000)
-    
-    coord_string = f"<box>({norm_ymin},{norm_xmin}),({norm_ymax},{norm_xmax})</box>"
-    
+    norm_ymax = int((y_max / img_h) * 1000)
+
+    coord_string = f"<box>({norm_xmin},{norm_ymin}),({norm_xmax},{norm_ymax})</box>"
     # 5. 构建 Prompt
     system_prompt = "You are an expert visual attribute analyzer. You strictly output valid JSON dictionaries only."
     
