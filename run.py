@@ -6,9 +6,8 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import torch
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-from transformers import Qwen3VLForConditionalGeneration
 
 from qwen_vl_utils import process_vision_info
 
