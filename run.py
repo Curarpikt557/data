@@ -127,7 +127,7 @@ Output a strictly formatted JSON dictionary using ONE of the schemas below:
 5. OUTPUT FORMAT: Output the raw JSON object ONLY. NO markdown tags (e.g., ```json), NO conversational text.
 """
     
-    return pil_img, system_prompt, user_prompt
+    return pil_img, system_prompt, user_promptclear
 
 def process_single_object(image_path, bbox, original_caption):
     """处理单个目标，调用 VLM 并返回结构化属性"""
@@ -160,7 +160,7 @@ def process_single_object(image_path, bbox, original_caption):
         
         # 推理生成
         with torch.no_grad():
-            generated_ids = model.generate(**inputs, max_new_tokens=128)
+            generated_ids = model.generate(**inputs, max_new_tokens=1024
             generated_ids_trimmed = [
                 out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
