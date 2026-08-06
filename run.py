@@ -88,19 +88,43 @@ def prepare_image_and_prompt(image_path, bbox, original_caption):
     norm_ymax = int((y_max / img_h) * 1000)
 
     coord_string = f"<box>({norm_xmin},{norm_ymin}),({norm_xmax},{norm_ymax})</box>"
-    # 5. 构建 Prompt
-    system_prompt = "You are an expert visual attribute analyzer. You strictly output valid JSON dictionaries only."
     
-    user_prompt = f"""Focus exclusively on the object inside the **Red Bounding Box** in the image, which is located at spatial coordinates {coord_string}.
+    # 5. 构建全新的 Prompt
+    system_prompt = """You are a highly precise Visual Attribute Analyzer and Description Generator. 
+Your task is to identify the main subject in the red box, extract its objective attributes following a strict cognitive hierarchy, and generate a new, comprehensive description based ONLY on the extracted attributes. 
+You strictly output valid JSON dictionaries only. Do not output any markdown formatting or explanations."""
+    
+    user_prompt = f"""Focus exclusively on the object inside the **Red Bounding Box** in the image, located at spatial coordinates {coord_string}.
 
-The initial rough description for this object is: '{original_caption}'.
+The initial rough description for this object is: '{original_caption}'. 
+Use this initial description ONLY to identify the main subject/target. You must re-evaluate all its attributes based strictly on the visual evidence inside the red box.
 
-Analyze this specific object in the red box carefully. Output a strictly formatted JSON dictionary following these rules:
-- If it is a Human, use this schema: {{"object": "...", "clothing": "...", "clothing_color": "...", "action_state": "..."}}
-- If it is a Non-human, use this schema: {{"object": "...", "color": "...", "material": "...", "state_status": "..."}}
+Output a strictly formatted JSON dictionary using ONE of the schemas below:
 
-Rule 1: If an attribute is invisible or cannot be determined with certainty, fill in 'unknown'.
-Rule 2: Do not output any markdown formatting, explanation, or extra text. Output ONLY the JSON object.
+- If it is a Human, use this schema:
+{{
+  "category": "<base entity, e.g., 'man', 'woman', 'boy'>",
+  "clothing": "<apparel worn, e.g., 'red t-shirt and blue jeans'>",
+  "accessories_parts": "<attached items or features, e.g., 'wearing glasses', 'carrying a backpack'>",
+  "action_posture": "<concrete physical posture/action, e.g., 'sitting', 'running'>",
+  "new_description": "<A natural, fluent sentence combining ONLY the valid attributes identified above.>"
+}}
+
+- If it is a Non-human (animal, vehicle, object, etc.), use this schema:
+{{
+  "category": "<base entity, e.g., 'dog', 'car', 'chair'>",
+  "color": "<primary visible colors, e.g., 'black and white'>",
+  "material": "<visible material/texture, e.g., 'wooden', 'metallic'>",
+  "state_status": "<physical state/condition, e.g., 'parked', 'open', 'broken'>",
+  "new_description": "<A natural, fluent sentence combining ONLY the valid attributes identified above.>"
+}}
+
+=== STRICT RULES ===
+1. ANTI-HALLUCINATION & UNKNOWN FALLBACK: Only extract attributes that are 100% clearly visible. If an attribute is invisible, occluded, uncertain, or inapplicable, you MUST assign the exact string "unknown". Do not guess.
+2. ABSOLUTE PROHIBITION OF SPATIAL WORDS: DO NOT include ANY spatial, positional, or relational terms in ANY field (including 'new_description'). FORBIDDEN words include: "left", "right", "top", "bottom", "background", "next to", "on the table", "in front of", "located at".
+3. STRICT VERB RULES: You are STRICTLY FORBIDDEN from using meaningless, abstract, or non-action verbs such as: "interacting", "interaction", "being", "existing", "located", "looking", "engaged in". The 'action_posture' MUST be a concrete, visually verifiable physical action (e.g., 'sitting', 'standing', 'holding a phone'). If unidentifiable, write "unknown".
+4. NEW DESCRIPTION SYNTHESIS: The 'new_description' field must seamlessly integrate ONLY the valid (non-'unknown') attributes into a comprehensive noun phrase or sentence. Do not add any new information or spatial relations not present in the extracted attribute fields.
+5. OUTPUT FORMAT: Output the raw JSON object ONLY. NO markdown tags (e.g., ```json), NO conversational text.
 """
     
     return pil_img, system_prompt, user_prompt
