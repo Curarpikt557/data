@@ -10,7 +10,7 @@ from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
 # ===================== 配置 =====================
-INPUT_JSON_PATH = "./grit_captions_full.json"
+INPUT_JSON_PATH = "./grit_full.json"
 OUTPUT_JSON_PATH = "./grit_caption_refined.json"
 IMAGE_DIR = "../unc_train/"
 MODEL_NAME = "../Qwen-3-VL-8B-Thinking"
