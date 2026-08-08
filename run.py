@@ -9,7 +9,7 @@ from tqdm import tqdm
 import torch
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
-
+  
 # ===================== 可调参数 =====================
 INPUT_JSON_PATH = "./grit_full.json"
 OUTPUT_JSON_PATH = "./grit_caption_refined.json"
@@ -26,7 +26,7 @@ print("Loading VLM Model...")
 model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
+    device_map="auto", 
 )
 processor = AutoProcessor.from_pretrained(MODEL_NAME)
 processor.tokenizer.padding_side = "left"
