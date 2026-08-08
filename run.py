@@ -20,7 +20,7 @@ MAX_NEW_TOKENS = 640           # 确保思考链+JSON完整输出
 MIN_NEW_TOKENS = 15            # 防止空输出
 IMAGE_SIZE = 896               # 如果加入缩放可以进一步提速
 DEBUG = False
-PRINT_ISSUES = True            # 保留问题打印，便于追踪
+PRINT_ISSUES = True            # 保留问题打印，便于追踪 
 # ===================== 模型加载 =====================
 print("Loading VLM Model...")
 model = Qwen3VLForConditionalGeneration.from_pretrained(
