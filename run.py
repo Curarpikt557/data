@@ -14,11 +14,11 @@ INPUT_JSON_PATH = "./grit_full.json"
 OUTPUT_JSON_PATH = "./grit_caption_refined.json"
 IMAGE_DIR = "../unc_train/"
 MODEL_NAME = "../Qwen-3-VL-8B-Thinking"
-BATCH_SIZE = 8                # 24G 显存可稳跑 6，可尝试 8
+BATCH_SIZE = 16                # 24G 显存可稳跑 6，可尝试 8
 MAX_NEW_TOKENS = 512          # 简化输出后无需 1024
 MIN_NEW_TOKENS = 10           # 防止空输出
 MAX_IMAGE_SIZE = 1024         # 限制图片最长边，加速编码且节省显存
-DEBUG = False                 # 批量跑时关闭调试打印
+DEBUG = True                  # 开启调试打印，查看每个物体的原始 caption 和输出 JSON
 
 # ===================== 模型加载 =====================
 print("Loading VLM Model...")
@@ -26,8 +26,6 @@ model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
     device_map="auto",
-    # 如果安装了 flash-attn 可取消下行注释
-    # attn_implementation="flash_attention_2"
 )
 processor = AutoProcessor.from_pretrained(MODEL_NAME)
 
@@ -60,7 +58,6 @@ def try_fix_truncated_json(text):
 def extract_json_from_text(text):
     """从清洗后文本中提取合法 JSON，过滤占位符，支持截断修复"""
     text = text.strip()
-    # 直接尝试解析
     if text.startswith('{'):
         try:
             return json.loads(text)
@@ -71,7 +68,6 @@ def extract_json_from_text(text):
             except:
                 pass
 
-    # 提取所有花括号块，丢弃占位符
     candidates = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
     real_jsons = []
     for cand in candidates:
@@ -92,7 +88,6 @@ def extract_json_from_text(text):
     if real_jsons:
         return real_jsons[-1]
 
-    # 兜底
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1:
@@ -160,14 +155,12 @@ def process_image_batch(image_path, objects):
     if img is None:
         print(f"[Skip] Image not found: {image_path}")
         return
-    # 缩放图片以加速编码
     img = resize_image_if_needed(img, MAX_IMAGE_SIZE)
     img_h, img_w = img.shape[:2]
     thickness = max(2, int(img_h * 0.005))
 
     results = [None] * len(objects)
 
-    # 构建所有 messages
     all_messages = []
     for obj in objects:
         bbox = obj["bbox"]
@@ -195,7 +188,6 @@ def process_image_batch(image_path, objects):
         ]
         all_messages.append(messages)
 
-    # 分批推理
     for batch_start in range(0, len(all_messages), BATCH_SIZE):
         batch_msgs = all_messages[batch_start:batch_start+BATCH_SIZE]
 
@@ -237,30 +229,26 @@ def process_image_batch(image_path, objects):
 
             if DEBUG:
                 print("\n" + "="*50)
-                print(f"OBJECT {idx}: {caption}")
-                print(f"RAW (last 300): ...{raw_out[-300:]}")
+                print(f"ORIGINAL CAPTION: {caption}")
 
             cleaned = clean_thinking_output(raw_out)
             attrs = extract_json_from_text(cleaned)
 
-            # 回退处理
             if "error" in attrs or len(raw_out.strip()) < 30:
                 if DEBUG:
                     print("⚠️ Fallback due to parse failure or short output.")
                 attrs = fallback_attributes(caption)
             else:
-                # 确保包含正确的字段，否则回退
                 if "category" not in attrs:
                     attrs = fallback_attributes(caption)
 
             results[idx] = attrs
 
             if DEBUG:
-                print(f"PARSED: {json.dumps(attrs, indent=2)}")
+                print(f"VLM OUTPUT JSON: {json.dumps(attrs, ensure_ascii=False)}")
 
         del inputs, generated_ids, generated_ids_trimmed, batch_images
 
-    # 写回 objects
     for obj, res in zip(objects, results):
         obj["vlm_structured_attributes"] = res
 
