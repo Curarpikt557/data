@@ -14,21 +14,24 @@ INPUT_JSON_PATH = "./grit_full.json"
 OUTPUT_JSON_PATH = "./grit_caption_refined.json"
 IMAGE_DIR = "../unc_train/"
 MODEL_NAME = "../Qwen-3-VL-8B-Thinking"
-BATCH_SIZE = 4
-MAX_NEW_TOKENS = 1024
-MIN_NEW_TOKENS = 20          # 强制至少生成 20 个 token，避免 "user"
-DEBUG = True
+BATCH_SIZE = 8                # 24G 显存可稳跑 6，可尝试 8
+MAX_NEW_TOKENS = 512          # 简化输出后无需 1024
+MIN_NEW_TOKENS = 10           # 防止空输出
+MAX_IMAGE_SIZE = 1024         # 限制图片最长边，加速编码且节省显存
+DEBUG = False                 # 批量跑时关闭调试打印
 
 # ===================== 模型加载 =====================
 print("Loading VLM Model...")
 model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto"
+    device_map="auto",
+    # 如果安装了 flash-attn 可取消下行注释
+    # attn_implementation="flash_attention_2"
 )
 processor = AutoProcessor.from_pretrained(MODEL_NAME)
 
-# 1. 关键：左填充，否则 decoder-only 会生成大量无效字符
+# 左填充 + pad_token 设置，避免右填充警告和生成混乱
 processor.tokenizer.padding_side = "left"
 if processor.tokenizer.pad_token_id is None:
     processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
@@ -38,9 +41,7 @@ print("Model Loaded Successfully!")
 # ===================== 工具函数 =====================
 def clean_thinking_output(text):
     """去除 Qwen3-VL-Thinking 的思考过程，只保留最终 JSON"""
-    # 移除  之后的内容
     text = re.sub(r'.*?</think>', '', text, flags=re.DOTALL).strip()
-    # 如果仍然没有有效内容，尝试提取 assistant 部分
     if not text:
         match = re.search(r'<\|im_start\|>assistant\n(.*)', text, re.DOTALL)
         if match:
@@ -50,9 +51,7 @@ def clean_thinking_output(text):
 def try_fix_truncated_json(text):
     """尝试修复被截断的 JSON，补全缺失的闭合括号"""
     text = text.strip()
-    # 如果以 { 开头，尝试补充缺失的 }
     if text.startswith('{'):
-        # 计算花括号数量
         open_braces = text.count('{') - text.count('}')
         if open_braces > 0:
             text += '}' * open_braces
@@ -61,19 +60,18 @@ def try_fix_truncated_json(text):
 def extract_json_from_text(text):
     """从清洗后文本中提取合法 JSON，过滤占位符，支持截断修复"""
     text = text.strip()
-    # 先尝试直接解析
+    # 直接尝试解析
     if text.startswith('{'):
         try:
             return json.loads(text)
         except:
-            # 尝试修复截断
             fixed = try_fix_truncated_json(text)
             try:
                 return json.loads(fixed)
             except:
                 pass
 
-    # 提取所有花括号块，丢弃值为 "..." 的占位符
+    # 提取所有花括号块，丢弃占位符
     candidates = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
     real_jsons = []
     for cand in candidates:
@@ -85,7 +83,6 @@ def extract_json_from_text(text):
                 continue
             real_jsons.append(obj)
         except:
-            # 尝试修复截断后再解析
             fixed = try_fix_truncated_json(cand)
             try:
                 obj = json.loads(fixed)
@@ -95,7 +92,7 @@ def extract_json_from_text(text):
     if real_jsons:
         return real_jsons[-1]
 
-    # 兜底：取第一个 { 到最后一个 }
+    # 兜底
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1:
@@ -106,24 +103,24 @@ def extract_json_from_text(text):
     return {"error": "parsing_failed", "raw_text": text[:200]}
 
 def build_prompt(original_caption, norm_xmin, norm_ymin, norm_xmax, norm_ymax):
+    """构建简化的用户提示，只要求属性 JSON，无需合成描述"""
     coord_string = f"<box>({norm_xmin},{norm_ymin}),({norm_xmax},{norm_ymax})</box>"
-    return f"""Focus exclusively on the object inside the **Red Bounding Box** at {coord_string}.
+    return f"""Focus on the object in the red box at {coord_string}.
+Initial rough description: '{original_caption}'. Use it only to identify the main subject, then re-evaluate all attributes from visual evidence.
 
-The initial rough description is: '{original_caption}'. Use it ONLY to identify the main subject, then re-evaluate attributes from visual evidence.
+Output ONLY a strict JSON dictionary (no markdown, no extra text) using one of these schemas:
 
-Output a strict JSON using ONE of these schemas (no extra text, no markdown):
-
-- Human: {{"category": "...", "clothing": "...", "accessories_parts": "...", "action_posture": "...", "new_description": "..."}}
-- Non-human: {{"category": "...", "color": "...", "material": "...", "state_status": "...", "new_description": "..."}}
+- Human: {{"category": "<man/woman/boy/girl>", "clothing": "...", "accessories_parts": "...", "action_posture": "..."}}
+- Non-human: {{"category": "<entity>", "color": "...", "material": "...", "state_status": "..."}}
 
 RULES:
-1. Unknown attributes → "unknown". No guessing.
+1. Unknown/uncertain → "unknown". NO guessing.
 2. NO spatial words (left/right/background/on the table/next to).
 3. NO abstract verbs (interacting/looking/being). Use concrete actions or "unknown".
-4. new_description: combine ONLY non-"unknown" attributes into a natural sentence.
-5. Output the JSON directly. Think briefly, then output."""
+4. Output the JSON directly. Think briefly, then output."""
 
 def draw_bbox(img, bbox, thickness):
+    """在原图上画红框，返回 PIL Image"""
     x_min, y_min, w, h = bbox
     x1, y1, x2, y2 = int(x_min), int(y_min), int(x_min+w), int(y_min+h)
     marked = img.copy()
@@ -131,24 +128,30 @@ def draw_bbox(img, bbox, thickness):
     marked_rgb = cv2.cvtColor(marked, cv2.COLOR_BGR2RGB)
     return Image.fromarray(marked_rgb)
 
+def resize_image_if_needed(img, max_size):
+    """如果图片最长边超过 max_size，等比例缩放"""
+    h, w = img.shape[:2]
+    if max(h, w) > max_size:
+        scale = max_size / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = cv2.resize(img, (new_w, new_h))
+    return img
+
 def fallback_attributes(caption):
-    """当输出过短或完全无法解析时，使用原始 caption 作为 new_description"""
-    # 简单判断是否为人类相关词
+    """当输出无法解析时，使用原始 caption 作为回退"""
     if any(w in caption.lower() for w in ["man", "woman", "person", "girl", "boy", "lady", "guy"]):
         return {
             "category": "unknown",
             "clothing": "unknown",
             "accessories_parts": "unknown",
-            "action_posture": "unknown",
-            "new_description": caption
+            "action_posture": "unknown"
         }
     else:
         return {
             "category": "unknown",
             "color": "unknown",
             "material": "unknown",
-            "state_status": "unknown",
-            "new_description": caption
+            "state_status": "unknown"
         }
 
 def process_image_batch(image_path, objects):
@@ -157,6 +160,8 @@ def process_image_batch(image_path, objects):
     if img is None:
         print(f"[Skip] Image not found: {image_path}")
         return
+    # 缩放图片以加速编码
+    img = resize_image_if_needed(img, MAX_IMAGE_SIZE)
     img_h, img_w = img.shape[:2]
     thickness = max(2, int(img_h * 0.005))
 
@@ -167,7 +172,6 @@ def process_image_batch(image_path, objects):
     for obj in objects:
         bbox = obj["bbox"]
         caption = obj["caption"]
-
         pil_img = draw_bbox(img, bbox, thickness)
 
         x_min, y_min, w, h = bbox
@@ -177,7 +181,7 @@ def process_image_batch(image_path, objects):
         norm_ymax = int(((y_min + h) / img_h) * 1000)
 
         user_prompt = build_prompt(caption, norm_xmin, norm_ymin, norm_xmax, norm_ymax)
-        system_prompt = "You are a precise Visual Attribute Analyzer. Think briefly, then output ONLY a valid JSON."
+        system_prompt = "You are a precise visual attribute extractor. Output ONLY a JSON dictionary. No extra text."
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -199,7 +203,7 @@ def process_image_batch(image_path, objects):
         batch_texts = []
         for msg in batch_msgs:
             text = processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True)
-            imgs, vids = process_vision_info([msg])  # 每次传入一个消息列表
+            imgs, vids = process_vision_info([msg])
             batch_texts.append(text)
             batch_images.extend(imgs)
 
@@ -210,11 +214,11 @@ def process_image_batch(image_path, objects):
             return_tensors="pt",
         ).to(model.device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             generated_ids = model.generate(
                 **inputs,
                 max_new_tokens=MAX_NEW_TOKENS,
-                min_new_tokens=MIN_NEW_TOKENS,   # 防止生成 "user"
+                min_new_tokens=MIN_NEW_TOKENS,
                 do_sample=False,
                 pad_token_id=processor.tokenizer.pad_token_id,
                 eos_token_id=processor.tokenizer.eos_token_id,
@@ -234,19 +238,19 @@ def process_image_batch(image_path, objects):
             if DEBUG:
                 print("\n" + "="*50)
                 print(f"OBJECT {idx}: {caption}")
-                print(f"RAW OUTPUT (last 300 chars): ...{raw_out[-300:]}")
+                print(f"RAW (last 300): ...{raw_out[-300:]}")
 
             cleaned = clean_thinking_output(raw_out)
             attrs = extract_json_from_text(cleaned)
 
-            # 2. 如果解析失败或输出过短，启用 fallback
+            # 回退处理
             if "error" in attrs or len(raw_out.strip()) < 30:
                 if DEBUG:
-                    print(f"⚠️ Parse failed or output too short, using fallback.")
+                    print("⚠️ Fallback due to parse failure or short output.")
                 attrs = fallback_attributes(caption)
             else:
-                # 额外验证：确保 JSON 包含必要字段，否则 fallback
-                if "new_description" not in attrs:
+                # 确保包含正确的字段，否则回退
+                if "category" not in attrs:
                     attrs = fallback_attributes(caption)
 
             results[idx] = attrs
